@@ -1,0 +1,141 @@
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+
+import pandas as pd
+
+# 数据整理
+data = {
+    "Year": [2010, 2015, 2020, 2023, 2024, 2030],
+    "Global_Computing_Power": [1000, 3000, 6000, 7500, 8200, 12000],  # 示例数据
+    "HPC_Energy_Consumption": [50, 120, 200, 240, 289.21, 500],  # TWh
+    "Carbon_Emissions": [83600000, 114400000, 160500000, 229400000, 332400000, 2342483383.33],  # tCO2
+    "Renewable_Energy_Proportion": [26.45, 32.0, 38.5, 44.0, 44.83, 44.83],  # %
+    "Fossil_Fuel_Proportion": [83.0, 75.0, 70.0, 65.0, 64.17, 64.17],  # %
+    "Nuclear_Energy_Proportion": [9.0, 8.0, 9.0, 9.0, 9.0, 9.0]  # %
+}
+
+# 创建 DataFrame
+df = pd.DataFrame(data)
+
+# 保存为 CSV 文件
+df.to_csv("hpc_energy_data.csv", index=False)
+print("CSV 文件已生成：hpc_energy_data.csv")
+
+data = pd.read_csv('hpc_energy_data.csv')
+
+
+X = data[['Computing_Power', 'Period']].values
+y = data['Energy_Consumption'].values.reshape(-1, 1)
+
+
+scaler_X = StandardScaler()
+scaler_y = StandardScaler()
+X_scaled = scaler_X.fit_transform(X)
+y_scaled = scaler_y.fit_transform(y)
+
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_scaled, y_scaled, test_size=0.2, random_state=42
+)
+
+
+X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
+X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
+
+
+class HPCEnergyModel(nn.Module):
+    def __init__(self, input_size):
+        super(HPCEnergyModel, self).__init__()
+        self.fc1 = nn.Linear(input_size, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 16)
+        self.fc4 = nn.Linear(16, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+        
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc2(x))
+        x = self.relu(self.fc3(x))
+        x = self.fc4(x)
+        return x
+
+
+input_size = X_train.shape[1]
+model = HPCEnergyModel(input_size)
+
+
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+
+
+num_epochs = 500
+train_losses = []
+test_losses = []
+
+for epoch in range(num_epochs):
+    
+    model.train()
+    optimizer.zero_grad()
+    outputs = model(X_train_tensor)
+    loss = criterion(outputs, y_train_tensor)
+    loss.backward()
+    optimizer.step()
+    train_losses.append(loss.item())
+    
+ 
+    model.eval()
+    with torch.no_grad():
+        test_outputs = model(X_test_tensor)
+        test_loss = criterion(test_outputs, y_test_tensor)
+        test_losses.append(test_loss.item())
+    
+    if (epoch+1) % 50 == 0:
+        print(f'Epoch [{epoch+1}/{num_epochs}], '
+              f'Train Loss: {loss.item():.4f}, '
+              f'Test Loss: {test_loss.item():.4f}')
+
+
+model.eval()
+with torch.no_grad():
+    
+    train_preds = model(X_train_tensor)
+    train_rmse = torch.sqrt(criterion(train_preds, y_train_tensor)).item()
+    
+    
+    test_preds = model(X_test_tensor)
+    test_rmse = torch.sqrt(criterion(test_preds, y_test_tensor)).item()
+
+print(f'\nFinal Model Performance:')
+print(f'Train RMSE: {train_rmse:.4f} (scaled), {train_rmse * scaler_y.scale_[0]:.2f} TWh (unscaled)')
+print(f'Test RMSE: {test_rmse:.4f} (scaled), {test_rmse * scaler_y.scale_[0]:.2f} TWh (unscaled)')
+
+
+def predict_energy(computing_power, period):
+    
+    input_data = np.array([[computing_power, period]])
+    input_scaled = scaler_X.transform(input_data)
+    input_tensor = torch.tensor(input_scaled, dtype=torch.float32)
+    
+   
+    model.eval()
+    with torch.no_grad():
+        prediction_scaled = model(input_tensor).item()
+    
+    
+    prediction = scaler_y.inverse_transform([[prediction_scaled]])[0][0]
+    return prediction
+
+
+predicted_2024 = predict_energy(8200, 1)
+print(f'\nPredicted energy consumption for 2024: {predicted_2024:.2f} TWh')
+print(f'Paper prediction for 2024: 289.21 TWh')
