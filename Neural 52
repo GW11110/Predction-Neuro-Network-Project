@@ -1,0 +1,235 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+import os
+
+# Sample data
+import pandas as pd
+from io import StringIO
+
+
+def read_user_csv():
+    print("Enter your dataset in CSV format with headers (value1,value2,value3,value4).")
+    print("Example format: value1,value2,value3,value4")
+    print("2010,1000,4.511,83600000")
+    print("Press Enter twice when done:")
+    
+    lines = []
+    while True:
+        line = input()
+        if line == "":
+            if lines:  
+                break
+            continue
+        lines.append(line)
+
+    if not lines:
+        raise ValueError("No data provided. Please input valid CSV data.")
+
+    csv_data = "\n".join(lines)
+    try:
+        data = pd.read_csv(StringIO(csv_data))
+        required_columns = ["value1", "value2", "value3", "value4"]
+        if not all(col in data.columns for col in required_columns):
+            raise ValueError(f"CSV must contain columns: {', '.join(required_columns)}")
+        if data.empty:
+            raise ValueError("Input CSV is empty.")
+        
+        if not data["value1"].apply(lambda x: isinstance(x, (int, float))).all():
+            raise ValueError("All 'value1' values must be numeric.")
+        if not data["value2"].apply(lambda x: isinstance(x, (int, float))).all():
+            raise ValueError("All 'value2' values must be numeric.")
+        if not data["value3"].apply(lambda x: isinstance(x, (int, float))).all():
+            raise ValueError("All 'value3' values must be numeric.")
+        if not data["value4"].apply(lambda x: isinstance(x, (int, float))).all():
+            raise ValueError("All 'value4' values must be numeric.")
+        return data
+    except pd.errors.ParserError:
+        raise ValueError("Invalid CSV format. Please provide valid CSV data with the correct structure.")
+
+
+try:
+    data = read_user_csv()
+    df = pd.DataFrame(data)
+    print("\nOriginal Data:")
+    print(df.head())
+except ValueError as e:
+    print(f"Error: {e}")
+    exit(1)
+
+X = data[["value1", "value2", "value3"]].values
+y = data["value4"].values.reshape(-1, 1)
+
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+
+scaler_X = StandardScaler()
+scaler_y = StandardScaler()
+
+X_train_scaled = scaler_X.fit_transform(X_train)
+y_train_scaled = scaler_y.fit_transform(y_train)
+
+X_test_scaled = scaler_X.transform(X_test)
+y_test_scaled = scaler_y.transform(y_test)
+
+
+X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
+y_train_tensor = torch.tensor(y_train_scaled, dtype=torch.float32)
+X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
+y_test_tensor = torch.tensor(y_test_scaled, dtype=torch.float32)
+
+
+X_train_full, X_val, y_train_full, y_val = train_test_split(
+    X_train_tensor, y_train_tensor, test_size=0.2, shuffle=False)
+
+
+class RegressionNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(3, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+model = RegressionNN()
+
+#here you can set up how many trials you want and how soon you want the network to stop and output data 
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+num_epochs = 3000
+train_losses = []
+val_losses = []
+
+best_val_loss = float('inf')
+patience = 500
+patience_counter = 0
+
+
+for epoch in range(num_epochs):
+    model.train()
+    optimizer.zero_grad()
+
+    outputs = model(X_train_full)
+    loss = criterion(outputs, y_train_full)
+    loss.backward()
+    optimizer.step()
+
+    train_losses.append(loss.item())
+
+    model.eval()
+    with torch.no_grad():
+        val_outputs = model(X_val)
+        val_loss = criterion(val_outputs, y_val)
+        val_losses.append(val_loss.item())
+
+    if (epoch + 1) % 100 == 0:
+        print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {loss.item():.6f}, Val Loss: {val_loss.item():.6f}")
+
+    if val_loss.item() < best_val_loss:
+        best_val_loss = val_loss.item()
+        patience_counter = 0
+        torch.save(model.state_dict(), 'best_model.pth')
+    else:
+        patience_counter += 1
+        if patience_counter >= patience:
+            print(f"Early stopping at epoch {epoch + 1}")
+            break
+
+
+model_file = 'best_model.pth'
+if os.path.exists(model_file):
+    model.load_state_dict(torch.load(model_file))
+else:
+    print(f"Error: Model file '{model_file}' not found. Using the last trained model.")
+
+
+model.eval()
+with torch.no_grad():
+    test_outputs = model(X_test_tensor)
+    test_loss = criterion(test_outputs, y_test_tensor)
+
+    test_outputs_orig = scaler_y.inverse_transform(test_outputs.numpy())
+    y_test_orig = scaler_y.inverse_transform(y_test_tensor.numpy())
+
+    mae = np.mean(np.abs(test_outputs_orig - y_test_orig))
+    print(f"\nTest Data MSE: {test_loss.item():.6f}")
+    print(f"Test Data MAE (original scale): {mae:.6f}")
+
+
+plt.figure(figsize=(15, 10))
+
+
+plt.subplot(2, 2, 1)
+plt.plot(train_losses, label='Training Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.xlabel("Epochs")
+plt.ylabel("Loss (MSE)")
+plt.legend()
+plt.title("Training and Validation Loss Curve")
+
+
+plt.subplot(2, 2, 2)
+plt.scatter(y_test_orig, test_outputs_orig, color='blue')
+min_val = min(np.min(y_test_orig), np.min(test_outputs_orig))
+max_val = max(np.max(y_test_orig), np.max(test_outputs_orig))
+plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
+plt.xlabel("Actual Values")
+plt.ylabel("Predicted Values")
+plt.title("Actual vs Predicted Values")
+
+
+plt.subplot(2, 1, 2)
+years = data['value1'].values
+all_years_tensor = torch.tensor(scaler_X.transform(X), dtype=torch.float32)
+with torch.no_grad():
+    all_preds_scaled = model(all_years_tensor)
+all_preds = scaler_y.inverse_transform(all_preds_scaled.numpy())
+
+plt.plot(years, data['value4'], 'bo-', label='Actual Values')
+plt.plot(years, all_preds, 'r--', label='Predicted Values')
+plt.xlabel('value1')
+plt.ylabel('value4')
+plt.title('output value')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+
+def predict_energy_consumption(year_input, data, scaler_X, scaler_y, model):
+    median_computing_power = np.median(data['value2'])
+    median_renewable_prop = np.median(data['value3']) 
+    input_features = np.array([[year_input, median_computing_power, median_renewable_prop, median_carbon]])
+    
+
+    input_scaled = scaler_X.transform(input_features)
+    input_tensor = torch.tensor(input_scaled, dtype=torch.float32)
+    
+    
+    model.eval()
+    with torch.no_grad():
+        pred_scaled = model(input_tensor)
+    pred_value = scaler_y.inverse_transform(pred_scaled.numpy())[0][0]
+    return pred_value
+
+
+try:
+    user_year = int(input("Enter the year for prediction (e.g., 2024): "))
+    predicted_energy = predict_energy_consumption(user_year, data, scaler_X, scaler_y, model)
+    print(f"Predicted energy consumption for {user_year}: {predicted_energy:.4f}")
+except ValueError:
+    print("Invalid input. Please enter a valid year as a number.")
